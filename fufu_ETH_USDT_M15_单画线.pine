@@ -1,5 +1,5 @@
 //@version=5
-indicator("ETHUSDT 15m 单画线", shorttitle = "ETH M15 单画线", overlay = true, max_bars_back = 1200, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 50)
+indicator("fufu ETHUSDT 15m 单画线", shorttitle = "fufu ETH M15", overlay = true, max_bars_back = 1200, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 50)
 
 // ======================= ① 参与合并的类别 =======================
 gA = "① 参与合并的类别（关掉即不参与）"
@@ -47,6 +47,11 @@ cSup    = input.color(#3fb950, "支撑 线（绿）",  group = gC)
 cBand   = input.color(#d29922, "变异支撑带（金）", group = gC)
 lw      = input.int(1, "线宽", minval = 1, maxval = 4, group = gC)
 showLbl = input.bool(true, "显示右侧中文标签", group = gC)
+
+// ======================= 常驻免责声明锚点 =======================
+DISC_TXT = "⚠ 免责声明：本指标仅为技术分析辅助工具，不构成任何投资建议。加密货币波动极大，据此操作盈亏自负。"
+discLo   = ta.lowest(low, 500)
+discAtr  = ta.atr(14)
 
 // ======================= 枢轴记录 =======================
 var int[]   phB = array.new_int()
@@ -387,3 +392,13 @@ if barstate.islast
                 if not na(y)
                     string t = array.size(kv) > 1 ? array.get(kv, 1) : "手动价位"
                     f_hLine(y, t, manCol, true)
+
+    // ---- 常驻免责声明（图表右下角，始终显示） ----
+    label dl = label.new(bar_index, discLo - discAtr * 2, text = DISC_TXT, style = label.style_label_left, color = color.new(color.black, 75), textcolor = color.gray, size = size.tiny, textalign = text.align_left)
+    array.push(LBS, dl)
+
+// ======================= 免责声明 =======================
+// 本脚本（fufu ETHUSDT 15m 单画线）仅为技术分析辅助工具，不构成任何投资建议、
+// 交易推荐或收益承诺。加密货币市场波动剧烈、风险极高，任何依据本脚本作出的
+// 交易决策及其盈亏，均由使用者自行承担。作者不对因使用本脚本而产生的任何
+// 直接或间接损失承担责任。
