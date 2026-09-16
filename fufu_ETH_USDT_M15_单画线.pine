@@ -1,14 +1,14 @@
 //@version=5
 indicator("fufu ETHUSDT 15m 单画线", shorttitle = "fufu ETH M15", overlay = true, max_bars_back = 1200, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 50)
 
-// ======================= ① 参与合并的类别 =======================
-gA = "① 参与合并的类别（关掉即不参与）"
-inc_p_untested = input.bool(true, "未回踩破的 压力",             group = gA)
-inc_p_flip     = input.bool(true, "已跌破的 压力 支撑互换 ←↓",   group = gA)
-inc_p_tested   = input.bool(true, "已回踩确认的 压力",           group = gA)
-inc_s_untested = input.bool(true, "未回踩破的 支撑 · 未来买",    group = gA)
-inc_s_flip     = input.bool(true, "已突破的 支撑 压力互换 ↑",    group = gA)
-inc_s_tested   = input.bool(true, "已回踩确认的 支撑",           group = gA)
+// ======================= ① 参与合并的类别（【做多·红】/【做空·绿】） =======================
+gA = "① 参与合并的类别（★做多=红线 / ★做空=绿线）"
+inc_s_untested = input.bool(true, "【做多·红】未回踩破的 支撑 · 未来买",    group = gA)
+inc_s_flip     = input.bool(true, "【做多·红】已突破的 支撑 压力互换 ↑",    group = gA)
+inc_s_tested   = input.bool(true, "【做多·红】已回踩确认的 支撑",           group = gA)
+inc_p_untested = input.bool(true, "【做空·绿】未回踩破的 压力",             group = gA)
+inc_p_flip     = input.bool(true, "【做空·绿】已跌破的 压力 支撑互换 ←↓",   group = gA)
+inc_p_tested   = input.bool(true, "【做空·绿】已回踩确认的 压力",           group = gA)
 
 // ======================= ② 识别参数 =======================
 gP = "② 识别参数"
@@ -42,15 +42,17 @@ manCol    = input.color(#d29922, "手动线颜色", group = gM)
 
 // ======================= ⑦ 颜色 =======================
 gC = "⑦ 颜色"
-cPres   = input.color(#f85149, "压力 线（红）",  group = gC)
-cSup    = input.color(#3fb950, "支撑 线（绿）",  group = gC)
-cBand   = input.color(#d29922, "变异支撑带（金）", group = gC)
+cPres   = input.color(#3fb950, "做空 压力线（绿）",  group = gC)
+cSup    = input.color(#f85149, "做多 支撑线（红）",  group = gC)
+cBand   = input.color(#d29922, "做多 变异支撑带（金）", group = gC)
+showLeg = input.bool(true, "显示配色图例", group = gC, tooltip = "在图右下角常驻一行说明：红线 = 做多，绿线 = 做空")
 lw      = input.int(1, "线宽", minval = 1, maxval = 4, group = gC)
 showLbl = input.bool(true, "显示右侧中文标签", group = gC)
 
 // ======================= 常驻免责声明锚点 =======================
 DISC_TXT = "⚠ 免责声明：本指标仅为技术分析辅助工具，不构成任何投资建议。加密货币波动极大，据此操作盈亏自负。"
 discLo   = ta.lowest(low, 500)
+discLo2  = ta.lowest(low, 100)
 discAtr  = ta.atr(14)
 
 // ======================= 枢轴记录 =======================
@@ -288,7 +290,7 @@ if barstate.islast
         for i = 0 to array.size(mP) - 1
             float  y   = array.get(mP, i)
             string sub = array.get(mB, i)
-            string txt = (y >= close_ ? "压力 · " : "支撑 · ") + sub
+            string txt = (y >= close_ ? "压力 · 做空 · " : "支撑 · 做多 · ") + sub
             string tip = array.get(mC, i) > 1 ? "合并了 " + str.tostring(array.get(mC, i)) + " 个同侧相近价位" : ""
             f_hLine(y, txt, y >= close_ ? cPres : cSup, not array.get(mS, i), tip)
 
@@ -393,8 +395,12 @@ if barstate.islast
                     string t = array.size(kv) > 1 ? array.get(kv, 1) : "手动价位"
                     f_hLine(y, t, manCol, true)
 
-    // ---- 常驻免责声明（图表右下角，始终显示） ----
-    label dl = label.new(bar_index, discLo - discAtr * 2, text = DISC_TXT, style = label.style_label_left, color = color.new(color.black, 75), textcolor = color.gray, size = size.tiny, textalign = text.align_left)
+    // ---- 常驻配色图例 + 免责声明（图表右下角，始终显示） ----
+    float discY = math.min(math.min(discLo, discLo2), close) - discAtr * 1.5
+    if showLeg
+        label lg = label.new(bar_index, discY + discAtr * 1.3, text = "🔴 红线 = 支撑 · 做多（逢跌找买点）　｜　🟢 绿线 = 压力 · 做空（逢涨找卖点）　｜　金色带 = 变异支撑（做多）", style = label.style_label_left, color = color.new(color.black, 80), textcolor = color.gray, size = size.tiny, textalign = text.align_left)
+        array.push(LBS, lg)
+    label dl = label.new(bar_index, discY, text = DISC_TXT, style = label.style_label_left, color = color.new(color.black, 75), textcolor = color.gray, size = size.tiny, textalign = text.align_left)
     array.push(LBS, dl)
 
 // ======================= 免责声明 =======================
