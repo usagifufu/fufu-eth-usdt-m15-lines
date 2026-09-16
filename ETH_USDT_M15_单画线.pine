@@ -1,0 +1,389 @@
+//@version=5
+indicator("ETHUSDT 15m 单画线", shorttitle = "ETH M15 单画线", overlay = true, max_bars_back = 1200, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 50)
+
+// ======================= ① 参与合并的类别 =======================
+gA = "① 参与合并的类别（关掉即不参与）"
+inc_p_untested = input.bool(true, "未回踩破的 压力",             group = gA)
+inc_p_flip     = input.bool(true, "已跌破的 压力 支撑互换 ←↓",   group = gA)
+inc_p_tested   = input.bool(true, "已回踩确认的 压力",           group = gA)
+inc_s_untested = input.bool(true, "未回踩破的 支撑 · 未来买",    group = gA)
+inc_s_flip     = input.bool(true, "已突破的 支撑 压力互换 ↑",    group = gA)
+inc_s_tested   = input.bool(true, "已回踩确认的 支撑",           group = gA)
+
+// ======================= ② 识别参数 =======================
+gP = "② 识别参数"
+pivL    = input.int(6,     "摆动点 左K线数", minval = 1, maxval = 50, group = gP, tooltip = "越大只认大级别摆动")
+pivR    = input.int(6,     "摆动点 右K线数", minval = 1, maxval = 50, group = gP)
+lookbk  = input.int(700,   "识别回看根数",   minval = 50, maxval = 900, group = gP, tooltip = "15m × 700 ≈ 7 天；上限 900 与脚本缓冲区 max_bars_back = 1200 对齐")
+tolPct  = input.float(0.15,"回踩容差 %",     minval = 0.0, step = 0.05, group = gP, tooltip = "价格走到距该位多少% 以内即算“回踩过”")
+nearPct = input.float(0.20,"贴近现价忽略 %", minval = 0.0, step = 0.05, group = gP, tooltip = "离现价太近的枢轴不画（噪声）")
+maxCat  = input.int(3,     "每类最多几条",   minval = 1, maxval = 6,    group = gP, tooltip = "先按类别限额，再进入合并去重")
+
+// ======================= ③ 合并去重（核心） =======================
+gM2 = "③ 合并去重（单画线）"
+mergePct = input.float(0.30, "同侧合并间距 %", minval = 0.0, maxval = 2.0, step = 0.05, group = gM2, tooltip = "同一侧、价位差在此百分比内的多条线合并成一条；调大线更少")
+
+// ======================= ④ 变异支撑带 =======================
+gN = "④ 变异支撑带（密集低点）"
+show_band = input.bool(true, "显示变异支撑带", group = gN)
+bandTol   = input.float(0.45, "带内容差 %",   minval = 0.05, step = 0.05, group = gN)
+bandMin   = input.int(3,      "最少触点个数",  minval = 2, maxval = 10,   group = gN)
+
+// ======================= ⑤ 趋势线 =======================
+gT = "⑤ 趋势线（扇形展开）"
+show_trend_down = input.bool(true, "下降压力线：最高摆动高点 → 更低高点", group = gT)
+show_trend_up   = input.bool(true, "上升支撑线：最低摆动低点 → 更高低点", group = gT)
+extBar          = input.int(80, "向右延长K线数", minval = 10, maxval = 300, group = gT, tooltip = "15m × 80 = 20 小时")
+
+// ======================= ⑥ 手动价位 =======================
+gM = "⑥ 手动价位（覆盖 / 追加，可留空）"
+manualStr = input.string("", "价格|标签;价格|标签", group = gM, tooltip = "例：2615|未回踩破的压力;2460|支撑互换位。留空则只用自动识别")
+manCol    = input.color(#d29922, "手动线颜色", group = gM)
+
+// ======================= ⑦ 颜色 =======================
+gC = "⑦ 颜色"
+cPres   = input.color(#f85149, "压力 线（红）",  group = gC)
+cSup    = input.color(#3fb950, "支撑 线（绿）",  group = gC)
+cBand   = input.color(#d29922, "变异支撑带（金）", group = gC)
+lw      = input.int(1, "线宽", minval = 1, maxval = 4, group = gC)
+showLbl = input.bool(true, "显示右侧中文标签", group = gC)
+
+// ======================= 枢轴记录 =======================
+var int[]   phB = array.new_int()
+var float[] phP = array.new_float()
+var int[]   plB = array.new_int()
+var float[] plP = array.new_float()
+
+pvH = ta.pivothigh(high, pivL, pivR)
+pvL = ta.pivotlow(low,  pivL, pivR)
+
+if not na(pvH)
+    array.push(phB, bar_index - pivR)
+    array.push(phP, pvH)
+    int cutH = bar_index - lookbk
+    while array.size(phB) > 0 and array.get(phB, 0) < cutH
+        array.shift(phB)
+        array.shift(phP)
+
+if not na(pvL)
+    array.push(plB, bar_index - pivR)
+    array.push(plP, pvL)
+    int cutL = bar_index - lookbk
+    while array.size(plB) > 0 and array.get(plB, 0) < cutL
+        array.shift(plB)
+        array.shift(plP)
+
+// ======================= 工具函数 =======================
+// 枢轴之后是否被回踩过（跳过枢轴自身右侧 pivR 根，避免同一簇延续被误判成回踩）
+f_touchedHigh(int pBar, float pPx, float tol) =>
+    bool res = false
+    int span = bar_index - pBar - pivR
+    if span >= 0
+        for k = 0 to math.min(span, lookbk)
+            if high[k] >= pPx * (1 - tol)
+                res := true
+                break
+    res
+
+f_touchedLow(int pBar, float pPx, float tol) =>
+    bool res = false
+    int span = bar_index - pBar - pivR
+    if span >= 0
+        for k = 0 to math.min(span, lookbk)
+            if low[k] <= pPx * (1 + tol)
+                res := true
+                break
+    res
+
+// 挑选：按“离现价最近”排序 + 同组最小间距去重 + 每类上限
+f_pick(catP, want, gapF, nearPx) =>
+    float[] outP = array.new_float()
+    int n = array.size(catP)
+    if n > 0
+        bool[] used = array.new_bool(n, false)
+        for _i = 0 to n - 1
+            int best = -1
+            float bestD = 1e12
+            for j = 0 to n - 1
+                if not array.get(used, j)
+                    float d = math.abs(array.get(catP, j) - nearPx)
+                    if d < bestD
+                        bestD := d
+                        best := j
+            if best >= 0
+                array.set(used, best, true)
+                if array.size(outP) < want
+                    float px = array.get(catP, best)
+                    bool ok = true
+                    if array.size(outP) > 0
+                        for m = 0 to array.size(outP) - 1
+                            if math.abs(px - array.get(outP, m)) / array.get(outP, m) <= gapF
+                                ok := false
+                    if ok
+                        array.push(outP, px)
+    outP
+
+// 类别代码 → 短标签 / 是否实线（未破=实线）
+f_kSub(int k) =>
+    k == 1 ? "未破" : k == 2 ? "互换↓" : k == 3 ? "已回踩" : k == 4 ? "未来买" : k == 5 ? "互换↑" : "已回踩"
+
+f_kSolid(int k) =>
+    k == 1 or k == 4
+
+// 把一批价位按类别代码压入候选池
+f_pushCand(cP, cK, arr, k) =>
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            array.push(cP, array.get(arr, i))
+            array.push(cK, k)
+
+// 合并去重：同侧 + 间距内 → 一条；优先级 未破 > 互换位 > 已回踩
+f_merge(cP, cK, mP, mK, mS, mC, mB, cc, gapF) =>
+    array.clear(mP)
+    array.clear(mK)
+    array.clear(mS)
+    array.clear(mC)
+    array.clear(mB)
+    int n = array.size(cP)
+    if n > 0
+        for i = 0 to n - 1
+            float y = array.get(cP, i)
+            int   k = array.get(cK, i)
+            int   jj = -1
+            if array.size(mP) > 0
+                for j = 0 to array.size(mP) - 1
+                    float z = array.get(mP, j)
+                    bool sameSide = (y >= cc and z >= cc) or (y < cc and z < cc)
+                    if jj < 0 and sameSide and math.abs(y - z) / math.min(y, z) <= gapF
+                        jj := j
+            if jj < 0
+                array.push(mP, y)
+                array.push(mK, k)
+                array.push(mS, f_kSolid(k))
+                array.push(mC, 1)
+                array.push(mB, f_kSub(k))
+            else
+                array.set(mC, jj, array.get(mC, jj) + 1)
+                array.set(mS, jj, array.get(mS, jj) or f_kSolid(k))
+                string sp = f_kSub(k)
+                if not str.contains(array.get(mB, jj), sp)
+                    array.set(mB, jj, array.get(mB, jj) + "·" + sp)
+
+// ======================= 绘图容器 =======================
+var line[]  LNS = array.new_line()
+var label[] LBS = array.new_label()
+var box[]   BXS = array.new_box()
+
+f_clearAll() =>
+    if array.size(LNS) > 0
+        for i = 0 to array.size(LNS) - 1
+            line.delete(array.get(LNS, i))
+        array.clear(LNS)
+    if array.size(LBS) > 0
+        for i = 0 to array.size(LBS) - 1
+            label.delete(array.get(LBS, i))
+        array.clear(LBS)
+    if array.size(BXS) > 0
+        for i = 0 to array.size(BXS) - 1
+            box.delete(array.get(BXS, i))
+        array.clear(BXS)
+
+f_x0() =>
+    math.max(bar_index - lookbk, 0)
+
+f_hLine(float y, string txt, color c, bool dash, string tip = "") =>
+    line ln = line.new(f_x0(), y, bar_index + extBar, y, color = c, width = lw, style = dash ? line.style_dashed : line.style_solid)
+    array.push(LNS, ln)
+    if showLbl
+        label lb = label.new(bar_index + extBar, y, text = txt + "  " + str.tostring(y, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = c, size = size.small, textalign = text.align_left, tooltip = tip)
+        array.push(LBS, lb)
+
+// ======================= 主逻辑（只在最后一根K线重算重画） =======================
+if barstate.islast
+    f_clearAll()
+
+    float close_ = close
+    float tol    = tolPct / 100.0
+    float gapF   = mergePct / 100.0
+    float nearF  = nearPct / 100.0
+
+    // ---- 分类收集 ----
+    int[]   pUnB = array.new_int()
+    float[] pUnP = array.new_float()
+    int[]   pFlB = array.new_int()
+    float[] pFlP = array.new_float()
+    int[]   pTeB = array.new_int()
+    float[] pTeP = array.new_float()
+    int[]   sUnB = array.new_int()
+    float[] sUnP = array.new_float()
+    int[]   sTeB = array.new_int()
+    float[] sTeP = array.new_float()
+    int[]   sFlB = array.new_int()
+    float[] sFlP = array.new_float()
+
+    // 摆动高点 → 未回踩压力 / 已回踩压力 / 已突破 → 互换转支撑
+    if array.size(phP) > 0
+        for i = 0 to array.size(phP) - 1
+            float px = array.get(phP, i)
+            int   pb = array.get(phB, i)
+            if math.abs(px - close_) / close_ > nearF
+                if px > close_
+                    if f_touchedHigh(pb, px, tol)
+                        array.push(pTeB, pb)
+                        array.push(pTeP, px)
+                    else
+                        array.push(pUnB, pb)
+                        array.push(pUnP, px)
+                else
+                    array.push(sFlB, pb)
+                    array.push(sFlP, px)
+
+    // 摆动低点 → 互换转压力 / 未回踩支撑（未来买）/ 已回踩支撑
+    if array.size(plP) > 0
+        for i = 0 to array.size(plP) - 1
+            float px = array.get(plP, i)
+            int   pb = array.get(plB, i)
+            if math.abs(px - close_) / close_ > nearF
+                if px > close_
+                    array.push(pFlB, pb)
+                    array.push(pFlP, px)
+                else
+                    if f_touchedLow(pb, px, tol)
+                        array.push(sTeB, pb)
+                        array.push(sTeP, px)
+                    else
+                        array.push(sUnB, pb)
+                        array.push(sUnP, px)
+
+    // ---- 候选池：按优先级顺序压入（未破 > 互换位 > 已回踩）----
+    float[] cP = array.new_float()
+    int[]   cK = array.new_int()
+    if inc_s_untested
+        f_pushCand(cP, cK, f_pick(sUnP, maxCat, gapF, close_), 4)
+    if inc_p_untested
+        f_pushCand(cP, cK, f_pick(pUnP, maxCat, gapF, close_), 1)
+    if inc_s_flip
+        f_pushCand(cP, cK, f_pick(sFlP, maxCat, gapF, close_), 5)
+    if inc_p_flip
+        f_pushCand(cP, cK, f_pick(pFlP, maxCat, gapF, close_), 2)
+    if inc_s_tested
+        f_pushCand(cP, cK, f_pick(sTeP, maxCat, gapF, close_), 6)
+    if inc_p_tested
+        f_pushCand(cP, cK, f_pick(pTeP, maxCat, gapF, close_), 3)
+
+    // ---- 合并去重 → 一套线 ----
+    float[]  mP = array.new_float()
+    int[]    mK = array.new_int()
+    bool[]   mS = array.new_bool()
+    int[]    mC = array.new_int()
+    string[] mB = array.new_string()
+    f_merge(cP, cK, mP, mK, mS, mC, mB, close_, gapF)
+
+    if array.size(mP) > 0
+        for i = 0 to array.size(mP) - 1
+            float  y   = array.get(mP, i)
+            string sub = array.get(mB, i)
+            string txt = (y >= close_ ? "压力 · " : "支撑 · ") + sub
+            string tip = array.get(mC, i) > 1 ? "合并了 " + str.tostring(array.get(mC, i)) + " 个同侧相近价位" : ""
+            f_hLine(y, txt, y >= close_ ? cPres : cSup, not array.get(mS, i), tip)
+
+    // ---- 变异支撑带：触点最多的密集低点区 ----
+    if show_band
+        if array.size(plP) > 0
+            int   bestCnt = 0
+            float bestLo  = na
+            float bestHi  = na
+            for i = 0 to array.size(plP) - 1
+                float base = array.get(plP, i)
+                int   cnt  = 0
+                float lo   = 10e10
+                float hi   = 0.0
+                for j = 0 to array.size(plP) - 1
+                    float q = array.get(plP, j)
+                    if math.abs(q - base) / base <= bandTol / 100.0
+                        cnt += 1
+                        lo := math.min(lo, q)
+                        hi := math.max(hi, q)
+                if cnt >= bandMin and lo < close_ and cnt > bestCnt
+                    bestCnt := cnt
+                    bestLo  := lo
+                    bestHi  := hi
+            if bestCnt > 0
+                box bx = box.new(f_x0(), bestHi, bar_index + extBar, bestLo, border_color = color.new(cBand, 60), border_width = 1, bgcolor = color.new(cBand, 90))
+                array.push(BXS, bx)
+                if showLbl
+                    string btxt = "变异 支撑 · 未破买\n" + str.tostring(bestLo, format.mintick) + " – " + str.tostring(bestHi, format.mintick) + "（" + str.tostring(bestCnt) + " 触点）"
+                    label lb = label.new(bar_index + extBar, (bestLo + bestHi) / 2, text = btxt, style = label.style_label_left, color = color.new(color.black, 100), textcolor = cBand, size = size.small, textalign = text.align_left)
+                    array.push(LBS, lb)
+
+    // ---- 下降压力线：最高摆动高点 → 之后的更低高点，扇形展开 ----
+    if show_trend_down
+        if array.size(phP) > 1
+            int   topH = 0
+            float topP = array.get(phP, 0)
+            for i = 1 to array.size(phP) - 1
+                if array.get(phP, i) > topP
+                    topP := array.get(phP, i)
+                    topH := i
+            int[] cand = array.new_int()
+            if topH < array.size(phP) - 1
+                for i = topH + 1 to array.size(phP) - 1
+                    if array.get(phP, i) < topP
+                        array.push(cand, i)
+            int m = math.min(2, array.size(cand))
+            if m > 0
+                for k = 0 to m - 1
+                    int   idx = array.get(cand, array.size(cand) - m + k)
+                    float y1  = topP
+                    float y2  = array.get(phP, idx)
+                    int   x1  = array.get(phB, topH)
+                    int   x2  = array.get(phB, idx)
+                    float sl  = (y2 - y1) / math.max(x2 - x1, 1)
+                    float yE  = y2 + sl * (bar_index + extBar - x2)
+                    line ln = line.new(x1, y1, bar_index + extBar, yE, color = cPres, width = lw, style = k == 0 ? line.style_solid : line.style_dashed)
+                    array.push(LNS, ln)
+                    if showLbl
+                        label lb = label.new(bar_index + extBar, yE, text = "下降压力线" + str.tostring(k + 1), style = label.style_label_left, color = color.new(color.black, 100), textcolor = cPres, size = size.small)
+                        array.push(LBS, lb)
+
+    // ---- 上升支撑线：最低摆动低点 → 之后的更高低点 ----
+    if show_trend_up
+        if array.size(plP) > 1
+            int   botH = 0
+            float botP = array.get(plP, 0)
+            for i = 1 to array.size(plP) - 1
+                if array.get(plP, i) < botP
+                    botP := array.get(plP, i)
+                    botH := i
+            int[] cand2 = array.new_int()
+            if botH < array.size(plP) - 1
+                for i = botH + 1 to array.size(plP) - 1
+                    if array.get(plP, i) > botP
+                        array.push(cand2, i)
+            int m2 = math.min(2, array.size(cand2))
+            if m2 > 0
+                for k = 0 to m2 - 1
+                    int   idx = array.get(cand2, array.size(cand2) - 1 - k)
+                    float y1  = botP
+                    float y2  = array.get(plP, idx)
+                    int   x1  = array.get(plB, botH)
+                    int   x2  = array.get(plB, idx)
+                    float sl  = (y2 - y1) / math.max(x2 - x1, 1)
+                    float yE  = y2 + sl * (bar_index + extBar - x2)
+                    line ln = line.new(x1, y1, bar_index + extBar, yE, color = cSup, width = lw, style = k == 0 ? line.style_solid : line.style_dashed)
+                    array.push(LNS, ln)
+                    if showLbl
+                        label lb = label.new(bar_index + extBar, yE, text = "上升支撑线" + str.tostring(k + 1), style = label.style_label_left, color = color.new(color.black, 100), textcolor = cSup, size = size.small)
+                        array.push(LBS, lb)
+
+    // ---- 手动价位覆盖 ----
+    if str.length(manualStr) > 0
+        string[] items = str.split(manualStr, ";")
+        for i = 0 to array.size(items) - 1
+            string it = str.replace_all(array.get(items, i), " ", "")
+            if str.length(it) > 0
+                string[] kv = str.split(it, "|")
+                float y = str.tonumber(array.get(kv, 0))
+                if not na(y)
+                    string t = array.size(kv) > 1 ? array.get(kv, 1) : "手动价位"
+                    f_hLine(y, t, manCol, true)

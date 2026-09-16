@@ -1,0 +1,5 @@
+# Pine 脚本一律以 LF 存储
+*.pine text eol=lf
+
+# Markdown 同样用 LF
+*.md text eol=lf
