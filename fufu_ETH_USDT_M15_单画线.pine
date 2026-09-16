@@ -67,8 +67,13 @@ pvL = ta.pivotlow(low,  pivL, pivR)
 if not na(pvH)
     array.push(phB, bar_index - pivR)
     array.push(phP, pvH)
+    // ★注意：Pine 的 and / or 不做短路求值（两边永远都算），
+    //   所以不能写 while array.size(x) > 0 and array.get(x, 0) < cut —— 数组为空时 array.get 照样越界。
+    //   改成「if/条件里先挡空 + array.get 不进条件逻辑的右侧」。
     int cutH = bar_index - lookbk
-    while array.size(phB) > 0 and array.get(phB, 0) < cutH
+    while array.size(phB) > 0
+        if array.get(phB, 0) >= cutH
+            break
         array.shift(phB)
         array.shift(phP)
 
@@ -76,7 +81,9 @@ if not na(pvL)
     array.push(plB, bar_index - pivR)
     array.push(plP, pvL)
     int cutL = bar_index - lookbk
-    while array.size(plB) > 0 and array.get(plB, 0) < cutL
+    while array.size(plB) > 0
+        if array.get(plB, 0) >= cutL
+            break
         array.shift(plB)
         array.shift(plP)
 
@@ -392,7 +399,11 @@ if barstate.islast
                 string[] kv = str.split(it, "|")
                 float y = str.tonumber(array.get(kv, 0))
                 if not na(y)
-                    string t = array.size(kv) > 1 ? array.get(kv, 1) : "手动价位"
+                    // 不写成 array.size(kv) > 1 ? array.get(kv, 1) : "手动价位"：
+                    // 若三元两分支都求值，只写价位的用法会越界。用 if 显式赋值最稳。
+                    string t = "手动价位"
+                    if array.size(kv) > 1
+                        t := array.get(kv, 1)
                     f_hLine(y, t, manCol, true)
 
     // ---- 常驻配色图例 + 免责声明（图表右下角，始终显示） ----
