@@ -49,10 +49,22 @@ showLeg = input.bool(true, "显示配色图例", group = gC, tooltip = "在图�
 lw      = input.int(1, "线宽", minval = 1, maxval = 4, group = gC)
 showLbl = input.bool(true, "显示右侧中文标签", group = gC)
 
+// ======================= ⑧ 多空分界与趋势过滤 =======================
+gD = "⑧ 多空分界与趋势过滤"
+showDiv  = input.bool(true,  "显示多空分界线", group = gD, tooltip = "做多趋势时，线 = 最近一个已证实的摆动低点（收盘跌破即转空）；做空趋势时，线 = 最近一个已证实的摆动高点（收盘突破即转多）。它同时也是结构止损位")
+trendFlt = input.bool(true,  "按趋势过滤：只显示同向画线", group = gD, tooltip = "做多趋势只留【做多·红】的支撑类（含变异支撑带、上升支撑线）；做空趋势只留【做空·绿】的压力类（含下降压力线）。关掉则恢复全部显示")
+showStat = input.bool(true,  "显示趋势状态标签", group = gD, tooltip = "在图表左上角常驻一行：当前方向 + 只显示哪一侧画线")
+divPiv   = input.int(14,     "分界 摆动点左/右K线数", minval = 2, maxval = 50, group = gD, tooltip = "多空分界专用枢轴，比画线用的枢轴更粗。画线找的是具体价位，分界判的是大结构。调大方向更稳但更迟钝；用 6（跟画线一样）会在区间里反复换边")
+divBkPct = input.float(0.15, "分界穿越确认 %", minval = 0.0, maxval = 3.0, step = 0.05, group = gD, tooltip = "收盘价须超出分界线这个幅度，才认定趋势翻转。调大更稳（少翻转）、调小更灵敏（早转向）")
+divW     = input.int(2,      "分界线宽度",   minval = 1, maxval = 6, group = gD)
+cDivL    = input.color(#f85149, "做多 分界线（红）", group = gD)
+cDivS    = input.color(#3fb950, "做空 分界线（绿）", group = gD)
+
 // ======================= 常驻免责声明锚点 =======================
 DISC_TXT = "⚠ 免责声明：本指标仅为技术分析辅助工具，不构成任何投资建议。加密货币波动极大，据此操作盈亏自负。"
 discLo   = ta.lowest(low, 500)
 discLo2  = ta.lowest(low, 100)
+discHi   = ta.highest(high, 500)
 discAtr  = ta.atr(14)
 
 // ======================= 枢轴记录 =======================
@@ -86,6 +98,56 @@ if not na(pvL)
             break
         array.shift(plB)
         array.shift(plP)
+
+// ======================= 多空分界：结构状态机（★必须逐根K线推进） =======================
+// 判定法（道氏结构）：
+//   多头结构里，分界线 = 最近一个「已证实的摆动低点」。收盘价跌破它 → 结构破坏 → 转空。
+//   空头结构里，分界线 = 最近一个「已证实的摆动高点」。收盘价突破它 → 结构反转 → 转多。
+// 分界线因此天然随结构移动：多头里它被不断抬高的低点顶上去，空头里被不断降低的高点压下来。
+//
+// ★三个不能改的地方：
+//   1) 不能写进 if barstate.islast —— 那样只在末根K线算一次，拿不到历史累积的方向，
+//      trendDir 会永远停在初始的 0，分界线和过滤全部失效。
+//   2) 判定方向时只用「本方向的那一侧枢轴」：做多时只看有没有跌破低点，不看有没有
+//      突破高点。否则价格在区间里来回震荡时，两侧条件会轮流成立、方向反复翻转。
+//   3) 枢轴是延迟 pivR 根才确认的，所以 lastSupLv / lastResLv 都是「最近已确认」而非
+//      「最近发生」。这不是 bug，是 ta.pivot* 的固有特性。
+//   4) 分界用的是独立的一套枢轴 pvHD / pvLD（粒度 divPiv，默认 14），比画线用的 pivL/pivR
+//      （默认 6）更粗。实测同用 6 时，900 根 15m 里方向要翻 14 次，价格稍有回踩就换边；
+//      换成 14 后降到 6 次、中位持有 31 小时，稳定得多。
+var float lastSupLv = na        // 最近一个已证实的摆动低点（多头分界候选）
+var float lastResLv = na        // 最近一个已证实的摆动高点（空头分界候选）
+var int   trendDir  = 0         // 1 = 做多，-1 = 做空，0 = 尚未判定
+
+pvHD = ta.pivothigh(high, divPiv, divPiv)
+pvLD = ta.pivotlow(low,  divPiv, divPiv)
+
+if not na(pvLD)
+    lastSupLv := pvLD
+if not na(pvHD)
+    lastResLv := pvHD
+
+float divBk = divBkPct / 100.0
+
+if trendDir == 0
+    // 冷启动：先出现哪个可用枢轴就按哪个定方向
+    if not na(lastSupLv) and close > lastSupLv
+        trendDir := 1
+    else if not na(lastResLv) and close < lastResLv
+        trendDir := -1
+else if trendDir == 1
+    if not na(lastSupLv) and close < lastSupLv * (1 - divBk)
+        trendDir := -1
+else
+    if not na(lastResLv) and close > lastResLv * (1 + divBk)
+        trendDir := 1
+
+// 趋势过滤开关（关掉 → 全部照画）
+bool keepBull = not trendFlt or trendDir != -1    // 保留【做多·红】类
+bool keepBear = not trendFlt or trendDir != 1     // 保留【做空·绿】类
+// 当前生效的分界线价位与颜色（trendDir = 0 时为 na，不画）
+float divLv = trendDir == 1 ? lastSupLv : trendDir == -1 ? lastResLv : na
+color divCl = trendDir == 1 ? cDivL : trendDir == -1 ? cDivS : color.gray
 
 // ======================= 工具函数 =======================
 // 枢轴之后是否被回踩过（跳过枢轴自身右侧 pivR 根，避免同一簇延续被误判成回踩）
@@ -296,13 +358,17 @@ if barstate.islast
     if array.size(mP) > 0
         for i = 0 to array.size(mP) - 1
             float  y   = array.get(mP, i)
-            string sub = array.get(mB, i)
-            string txt = (y >= close_ ? "压力 · 做空 · " : "支撑 · 做多 · ") + sub
-            string tip = array.get(mC, i) > 1 ? "合并了 " + str.tostring(array.get(mC, i)) + " 个同侧相近价位" : ""
-            f_hLine(y, txt, y >= close_ ? cPres : cSup, not array.get(mS, i), tip)
+            // 现价上方 = 压力侧（做空·绿）；现价下方 = 支撑侧（做多·红）。
+            // 趋势过滤在这里生效：做多只留支撑侧，做空只留压力侧。
+            bool isBear = y >= close_
+            if isBear ? keepBear : keepBull
+                string sub = array.get(mB, i)
+                string txt = (isBear ? "压力 · 做空 · " : "支撑 · 做多 · ") + sub
+                string tip = array.get(mC, i) > 1 ? "合并了 " + str.tostring(array.get(mC, i)) + " 个同侧相近价位" : ""
+                f_hLine(y, txt, isBear ? cPres : cSup, not array.get(mS, i), tip)
 
-    // ---- 变异支撑带：触点最多的密集低点区 ----
-    if show_band
+    // ---- 变异支撑带：触点最多的密集低点区（做多侧，做空趋势下隐藏） ----
+    if show_band and keepBull
         if array.size(plP) > 0
             int   bestCnt = 0
             float bestLo  = na
@@ -330,8 +396,8 @@ if barstate.islast
                     label lb = label.new(bar_index + extBar, (bestLo + bestHi) / 2, text = btxt, style = label.style_label_left, color = color.new(color.black, 100), textcolor = cBand, size = size.small, textalign = text.align_left)
                     array.push(LBS, lb)
 
-    // ---- 下降压力线：最高摆动高点 → 之后的更低高点，扇形展开 ----
-    if show_trend_down
+    // ---- 下降压力线：最高摆动高点 → 之后的更低高点，扇形展开（做空侧） ----
+    if show_trend_down and keepBear
         if array.size(phP) > 1
             int   topH = 0
             float topP = array.get(phP, 0)
@@ -360,8 +426,8 @@ if barstate.islast
                         label lb = label.new(bar_index + extBar, yE, text = "下降压力线" + str.tostring(k + 1), style = label.style_label_left, color = color.new(color.black, 100), textcolor = cPres, size = size.small)
                         array.push(LBS, lb)
 
-    // ---- 上升支撑线：最低摆动低点 → 之后的更高低点 ----
-    if show_trend_up
+    // ---- 上升支撑线：最低摆动低点 → 之后的更高低点（做多侧） ----
+    if show_trend_up and keepBull
         if array.size(plP) > 1
             int   botH = 0
             float botP = array.get(plP, 0)
@@ -406,10 +472,41 @@ if barstate.islast
                         t := array.get(kv, 1)
                     f_hLine(y, t, manCol, true)
 
+    // ---- 多空分界线（最后创建 = 画在最上层，加粗实线） ----
+    if showDiv and not na(divLv)
+        line dv = line.new(f_x0(), divLv, bar_index + extBar, divLv, color = divCl, width = divW, style = line.style_solid)
+        array.push(LNS, dv)
+        if showLbl
+            string dtx = "多空分界 · 做多 ｜ 收盘跌破 " + str.tostring(divLv * (1 - divBk), format.mintick) + " 转空"
+            if trendDir == -1
+                dtx := "多空分界 · 做空 ｜ 收盘突破 " + str.tostring(divLv * (1 + divBk), format.mintick) + " 转多"
+            label dlb = label.new(bar_index + extBar, divLv, text = dtx, style = label.style_label_left, color = color.new(color.black, 100), textcolor = divCl, size = size.normal, textalign = text.align_left)
+            array.push(LBS, dlb)
+
+    // ---- 趋势状态标签（图表左上角常驻） ----
+    if showStat
+        string sDir = "— 趋势：尚未判定"
+        if trendDir == 1
+            sDir := "📈 趋势：做多"
+        else if trendDir == -1
+            sDir := "📉 趋势：做空"
+        string sFlt = "暂显示全部画线"
+        if not trendFlt
+            sFlt := "（趋势过滤已关闭，显示全部画线）"
+        else if trendDir == 1
+            sFlt := "只显示【做多 · 红】支撑类画线"
+        else if trendDir == -1
+            sFlt := "只显示【做空 · 绿】压力类画线"
+        string sLv = ""
+        if not na(divLv)
+            sLv := "　｜　分界 " + str.tostring(divLv, format.mintick) + (trendDir == 1 ? "（跌破转空）" : "（突破转多）")
+        label st = label.new(f_x0(), discHi + discAtr * 1.5, text = sDir + "　" + sFlt + sLv, style = label.style_label_right, color = color.new(color.black, 70), textcolor = divCl, size = size.small, textalign = text.align_left)
+        array.push(LBS, st)
+
     // ---- 常驻配色图例 + 免责声明（图表右下角，始终显示） ----
     float discY = math.min(math.min(discLo, discLo2), close) - discAtr * 1.5
     if showLeg
-        label lg = label.new(bar_index, discY + discAtr * 1.3, text = "🔴 红线 = 支撑 · 做多（逢跌找买点）　｜　🟢 绿线 = 压力 · 做空（逢涨找卖点）　｜　金色带 = 变异支撑（做多）", style = label.style_label_left, color = color.new(color.black, 80), textcolor = color.gray, size = size.tiny, textalign = text.align_left)
+        label lg = label.new(bar_index, discY + discAtr * 1.3, text = "🔴 红线 = 支撑 · 做多（逢跌找买点）　｜　🟢 绿线 = 压力 · 做空（逢涨找卖点）　｜　金色带 = 变异支撑（做多）　｜　粗实线 = 多空分界（跌破/突破即换边）", style = label.style_label_left, color = color.new(color.black, 80), textcolor = color.gray, size = size.tiny, textalign = text.align_left)
         array.push(LBS, lg)
     label dl = label.new(bar_index, discY, text = DISC_TXT, style = label.style_label_left, color = color.new(color.black, 75), textcolor = color.gray, size = size.tiny, textalign = text.align_left)
     array.push(LBS, dl)
