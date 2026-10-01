@@ -1,3 +1,6 @@
+# 本文件自身也用 LF（不声明它的话，autocrlf=true 会让工作区被转成 CRLF）
+.gitattributes text eol=lf
+
 # Pine 脚本一律以 LF 存储
 *.pine text eol=lf
 
