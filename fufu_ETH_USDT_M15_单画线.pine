@@ -1,6 +1,22 @@
 //@version=5
 indicator("fufu ETHUSDT 15m 单画线", shorttitle = "fufu ETH M15", overlay = true, max_bars_back = 1200, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 50)
 
+// ======================= 脚本说明 =======================
+// 在 ETH/USDT 图上自动识别水平支撑 / 压力，按 6 类语义分类后合并去重成一套线，
+// 另附「变异支撑带」（触点最密的低点区）与扇形趋势线（上升支撑线 / 下降压力线）。
+//   颜色即方向：红 = 支撑 · 做多（永远在现价下方）；绿 = 压力 · 做空（永远在现价上方）。
+//   粗细即同向：与当前趋势同向的一侧画【粗线】，反向的一侧画【细线】（⑧ 可改成隐藏或同宽）。
+//   方向来源于「多空分界」状态机（道氏结构），分界线本身同时就是结构止损位。
+// 6 类标签的用途与方向：
+//   做多侧（红，逢跌找买点）
+//     未回踩破的 支撑   k=4  跌破之后一直没被回踩过，是「未来买点」
+//     突破互换↑        k=5  原本是压力，被向上突破后角色反转成支撑
+//     已回踩确认的 支撑 k=6  突破后回踩过并守住，最硬的一档
+//   做空侧（绿，逢涨找卖点）
+//     未回踩破的 压力   k=1
+//     跌破互换←↓       k=2  原本是支撑，被向下跌破后角色反转成压力
+//     已回踩确认的 压力 k=3
+
 // ======================= ① 参与合并的类别（【做多·红】/【做空·绿】） =======================
 gA = "① 参与合并的类别（★做多=红线 / ★做空=绿线）"
 inc_s_untested = input.bool(true, "【做多·红】未回踩破的 支撑 · 未来买",    group = gA)
@@ -46,14 +62,15 @@ cPres   = input.color(#3fb950, "做空 压力线（绿）",  group = gC)
 cSup    = input.color(#f85149, "做多 支撑线（红）",  group = gC)
 cBand   = input.color(#d29922, "做多 变异支撑带（金）", group = gC)
 showLeg = input.bool(true, "显示配色图例", group = gC, tooltip = "在图右下角常驻一行说明：红线 = 做多，绿线 = 做空")
-lw      = input.int(1, "线宽", minval = 1, maxval = 4, group = gC)
+lw      = input.int(2, "同向线宽（粗）", minval = 1, maxval = 6, group = gC, tooltip = "与当前趋势同向的那一侧画线宽度。做多趋势下即红色支撑类")
+lwOpp   = input.int(1, "反向线宽（细）", minval = 1, maxval = 6, group = gC, tooltip = "与当前趋势反向的那一侧画线宽度。做多趋势下即绿色压力类。想完全不区分粗细就设成和「同向线宽」一样的值，或者把 ⑧ 的「反向画线处理」改成「不区分粗细」")
 showLbl = input.bool(true, "显示右侧中文标签", group = gC)
 
-// ======================= ⑧ 多空分界与趋势过滤 =======================
-gD = "⑧ 多空分界与趋势过滤"
+// ======================= ⑧ 多空分界与趋势分层 =======================
+gD = "⑧ 多空分界与趋势分层"
 showDiv  = input.bool(true,  "显示多空分界线", group = gD, tooltip = "做多趋势时，线 = 最近一个已证实的摆动低点（收盘跌破即转空）；做空趋势时，线 = 最近一个已证实的摆动高点（收盘突破即转多）。它同时也是结构止损位")
-trendFlt = input.bool(true,  "按趋势过滤：只显示同向画线", group = gD, tooltip = "做多趋势只留【做多·红】的支撑类（含变异支撑带、上升支撑线）；做空趋势只留【做空·绿】的压力类（含下降压力线）。关掉则恢复全部显示")
-showStat = input.bool(true,  "显示趋势状态标签", group = gD, tooltip = "在图表左上角常驻一行：当前方向 + 只显示哪一侧画线")
+oppMode  = input.string("反向改细线", "反向画线处理", options = ["反向改细线", "反向完全隐藏", "不区分粗细"], group = gD, tooltip = "做多趋势下：【做多·红】支撑类（含变异支撑带、上升支撑线）算同向（粗线），【做空·绿】压力类（含下降压力线）算反向。做空趋势下反过来：绿线粗、红线细。改细线 = 两侧都看得到，但主次分明；完全隐藏 = 只留同向一侧")
+showStat = input.bool(true,  "显示趋势状态标签", group = gD, tooltip = "在图表左上角常驻一行：当前方向 + 哪一侧是粗线")
 divPiv   = input.int(14,     "分界 摆动点左/右K线数", minval = 2, maxval = 50, group = gD, tooltip = "多空分界专用枢轴，比画线用的枢轴更粗。画线找的是具体价位，分界判的是大结构。调大方向更稳但更迟钝；用 6（跟画线一样）会在区间里反复换边")
 divBkPct = input.float(0.15, "分界穿越确认 %", minval = 0.0, maxval = 3.0, step = 0.05, group = gD, tooltip = "收盘价须超出分界线这个幅度，才认定趋势翻转。调大更稳（少翻转）、调小更灵敏（早转向）")
 divW     = input.int(2,      "分界线宽度",   minval = 1, maxval = 6, group = gD)
@@ -142,9 +159,16 @@ else
     if not na(lastResLv) and close > lastResLv * (1 + divBk)
         trendDir := 1
 
-// 趋势过滤开关（关掉 → 全部照画）
-bool keepBull = not trendFlt or trendDir != -1    // 保留【做多·红】类
-bool keepBear = not trendFlt or trendDir != 1     // 保留【做空·绿】类
+// 反向侧处理（⑧ 反向画线处理）。趋势与两侧的对应关系：
+//   trendDir = 1（做多）→ 同向 = 做多·红类（支撑线 + 变异支撑带 + 上升支撑线），反向 = 做空·绿类
+//   trendDir = -1（做空）→ 反过来，绿粗红细
+//   trendDir = 0（未判定）→ 谁都不算反向，两侧一律用同向线宽
+bool hideBull = oppMode == "反向完全隐藏" and trendDir == -1   // 做空趋势下藏掉做多侧
+bool hideBear = oppMode == "反向完全隐藏" and trendDir == 1    // 做多趋势下藏掉做空侧
+bool thinBull = oppMode == "反向改细线"   and trendDir == -1   // 做空趋势下做多侧改细线
+bool thinBear = oppMode == "反向改细线"   and trendDir == 1    // 做多趋势下做空侧改细线
+bool keepBull = not hideBull   // 保留【做多·红】类
+bool keepBear = not hideBear   // 保留【做空·绿】类
 // 当前生效的分界线价位与颜色（trendDir = 0 时为 na，不画）
 float divLv = trendDir == 1 ? lastSupLv : trendDir == -1 ? lastResLv : na
 color divCl = trendDir == 1 ? cDivL : trendDir == -1 ? cDivS : color.gray
@@ -267,11 +291,13 @@ f_clearAll() =>
 f_x0() =>
     math.max(bar_index - lookbk, 0)
 
-f_hLine(float y, string txt, color c, bool dash, string tip = "") =>
-    line ln = line.new(f_x0(), y, bar_index + extBar, y, color = c, width = lw, style = dash ? line.style_dashed : line.style_solid)
+// thin = true → 反向侧画线：细线 + 更小的标签，与同向侧拉开主次
+f_hLine(float y, string txt, color c, bool dash, string tip = "", bool thin = false) =>
+    int w = thin ? lwOpp : lw
+    line ln = line.new(f_x0(), y, bar_index + extBar, y, color = c, width = w, style = dash ? line.style_dashed : line.style_solid)
     array.push(LNS, ln)
     if showLbl
-        label lb = label.new(bar_index + extBar, y, text = txt + "  " + str.tostring(y, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = c, size = size.small, textalign = text.align_left, tooltip = tip)
+        label lb = label.new(bar_index + extBar, y, text = txt + "  " + str.tostring(y, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = c, size = thin ? size.tiny : size.small, textalign = text.align_left, tooltip = tip)
         array.push(LBS, lb)
 
 // ======================= 主逻辑（只在最后一根K线重算重画） =======================
@@ -359,15 +385,16 @@ if barstate.islast
         for i = 0 to array.size(mP) - 1
             float  y   = array.get(mP, i)
             // 现价上方 = 压力侧（做空·绿）；现价下方 = 支撑侧（做多·红）。
-            // 趋势过滤在这里生效：做多只留支撑侧，做空只留压力侧。
-            bool isBear = y >= close_
+            // 反向侧处理在这里生效：默认两侧都画，只把反向侧改成细线。
+            bool isBear  = y >= close_
+            bool thinLn  = isBear ? thinBear : thinBull
             if isBear ? keepBear : keepBull
                 string sub = array.get(mB, i)
                 string txt = (isBear ? "压力 · 做空 · " : "支撑 · 做多 · ") + sub
                 string tip = array.get(mC, i) > 1 ? "合并了 " + str.tostring(array.get(mC, i)) + " 个同侧相近价位" : ""
-                f_hLine(y, txt, isBear ? cPres : cSup, not array.get(mS, i), tip)
+                f_hLine(y, txt, isBear ? cPres : cSup, not array.get(mS, i), tip, thinLn)
 
-    // ---- 变异支撑带：触点最多的密集低点区（做多侧，做空趋势下隐藏） ----
+    // ---- 变异支撑带：触点最多的密集低点区（做多侧；做空趋势下改细淡化，不是直接消失） ----
     if show_band and keepBull
         if array.size(plP) > 0
             int   bestCnt = 0
@@ -389,11 +416,12 @@ if barstate.islast
                     bestLo  := lo
                     bestHi  := hi
             if bestCnt > 0
-                box bx = box.new(f_x0(), bestHi, bar_index + extBar, bestLo, border_color = color.new(cBand, 60), border_width = 1, bgcolor = color.new(cBand, 90))
+                // 带子是面不是线，光靠边框粗细不好分辨，所以反向侧再叠一层透明度淡化
+                box bx = box.new(f_x0(), bestHi, bar_index + extBar, bestLo, border_color = color.new(cBand, thinBull ? 78 : 55), border_width = thinBull ? lwOpp : lw, bgcolor = color.new(cBand, thinBull ? 95 : 88))
                 array.push(BXS, bx)
                 if showLbl
                     string btxt = "变异 支撑 · 未破买\n" + str.tostring(bestLo, format.mintick) + " – " + str.tostring(bestHi, format.mintick) + "（" + str.tostring(bestCnt) + " 触点）"
-                    label lb = label.new(bar_index + extBar, (bestLo + bestHi) / 2, text = btxt, style = label.style_label_left, color = color.new(color.black, 100), textcolor = cBand, size = size.small, textalign = text.align_left)
+                    label lb = label.new(bar_index + extBar, (bestLo + bestHi) / 2, text = btxt, style = label.style_label_left, color = color.new(color.black, 100), textcolor = cBand, size = thinBull ? size.tiny : size.small, textalign = text.align_left)
                     array.push(LBS, lb)
 
     // ---- 下降压力线：最高摆动高点 → 之后的更低高点，扇形展开（做空侧） ----
@@ -420,10 +448,10 @@ if barstate.islast
                     int   x2  = array.get(phB, idx)
                     float sl  = (y2 - y1) / math.max(x2 - x1, 1)
                     float yE  = y2 + sl * (bar_index + extBar - x2)
-                    line ln = line.new(x1, y1, bar_index + extBar, yE, color = cPres, width = lw, style = k == 0 ? line.style_solid : line.style_dashed)
+                    line ln = line.new(x1, y1, bar_index + extBar, yE, color = cPres, width = thinBear ? lwOpp : lw, style = k == 0 ? line.style_solid : line.style_dashed)
                     array.push(LNS, ln)
                     if showLbl
-                        label lb = label.new(bar_index + extBar, yE, text = "下降压力线" + str.tostring(k + 1), style = label.style_label_left, color = color.new(color.black, 100), textcolor = cPres, size = size.small)
+                        label lb = label.new(bar_index + extBar, yE, text = "下降压力线" + str.tostring(k + 1), style = label.style_label_left, color = color.new(color.black, 100), textcolor = cPres, size = thinBear ? size.tiny : size.small)
                         array.push(LBS, lb)
 
     // ---- 上升支撑线：最低摆动低点 → 之后的更高低点（做多侧） ----
@@ -450,10 +478,10 @@ if barstate.islast
                     int   x2  = array.get(plB, idx)
                     float sl  = (y2 - y1) / math.max(x2 - x1, 1)
                     float yE  = y2 + sl * (bar_index + extBar - x2)
-                    line ln = line.new(x1, y1, bar_index + extBar, yE, color = cSup, width = lw, style = k == 0 ? line.style_solid : line.style_dashed)
+                    line ln = line.new(x1, y1, bar_index + extBar, yE, color = cSup, width = thinBull ? lwOpp : lw, style = k == 0 ? line.style_solid : line.style_dashed)
                     array.push(LNS, ln)
                     if showLbl
-                        label lb = label.new(bar_index + extBar, yE, text = "上升支撑线" + str.tostring(k + 1), style = label.style_label_left, color = color.new(color.black, 100), textcolor = cSup, size = size.small)
+                        label lb = label.new(bar_index + extBar, yE, text = "上升支撑线" + str.tostring(k + 1), style = label.style_label_left, color = color.new(color.black, 100), textcolor = cSup, size = thinBull ? size.tiny : size.small)
                         array.push(LBS, lb)
 
     // ---- 手动价位覆盖 ----
@@ -490,13 +518,17 @@ if barstate.islast
             sDir := "📈 趋势：做多"
         else if trendDir == -1
             sDir := "📉 趋势：做空"
-        string sFlt = "暂显示全部画线"
-        if not trendFlt
-            sFlt := "（趋势过滤已关闭，显示全部画线）"
-        else if trendDir == 1
-            sFlt := "只显示【做多 · 红】支撑类画线"
-        else if trendDir == -1
-            sFlt := "只显示【做空 · 绿】压力类画线"
+        // 说清楚「哪一侧是粗线」。趋势未判定时不区分主次，两侧一律同向线宽。
+        string sFlt = "全部画线同宽 · 未分层"
+        if trendDir != 0
+            string sNear = trendDir == 1 ? "做多 · 红" : "做空 · 绿"
+            string sFar  = trendDir == 1 ? "做空 · 绿" : "做多 · 红"
+            if hideBull or hideBear
+                sFlt := "只显示【" + sNear + "】一侧"
+            else if thinBull or thinBear
+                sFlt := "【" + sNear + "】粗线为主 ｜ 【" + sFar + "】细线为参考"
+            else
+                sFlt := "【" + sNear + "】与【" + sFar + "】同宽显示"
         string sLv = ""
         if not na(divLv)
             sLv := "　｜　分界 " + str.tostring(divLv, format.mintick) + (trendDir == 1 ? "（跌破转空）" : "（突破转多）")
@@ -506,7 +538,7 @@ if barstate.islast
     // ---- 常驻配色图例 + 免责声明（图表右下角，始终显示） ----
     float discY = math.min(math.min(discLo, discLo2), close) - discAtr * 1.5
     if showLeg
-        label lg = label.new(bar_index, discY + discAtr * 1.3, text = "🔴 红线 = 支撑 · 做多（逢跌找买点）　｜　🟢 绿线 = 压力 · 做空（逢涨找卖点）　｜　金色带 = 变异支撑（做多）　｜　粗实线 = 多空分界（跌破/突破即换边）", style = label.style_label_left, color = color.new(color.black, 80), textcolor = color.gray, size = size.tiny, textalign = text.align_left)
+        label lg = label.new(bar_index, discY + discAtr * 1.3, text = "🔴 红线 = 支撑 · 做多（逢跌找买点）　｜　🟢 绿线 = 压力 · 做空（逢涨找卖点）　｜　金色带 = 变异支撑（做多）　｜　粗线 = 顺趋势　细线 = 逆趋势参考　｜　最粗实线 = 多空分界（跌破/突破即换边）", style = label.style_label_left, color = color.new(color.black, 80), textcolor = color.gray, size = size.tiny, textalign = text.align_left)
         array.push(LBS, lg)
     label dl = label.new(bar_index, discY, text = DISC_TXT, style = label.style_label_left, color = color.new(color.black, 75), textcolor = color.gray, size = size.tiny, textalign = text.align_left)
     array.push(LBS, dl)
